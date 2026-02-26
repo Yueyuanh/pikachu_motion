@@ -15,6 +15,7 @@ from placo_utils.visualization import footsteps_viz, robot_frame_viz, robot_viz,
 from scipy.spatial.transform import Rotation as R
 
 from placo_walk_engine import PlacoWalkEngine
+from pikachu_walk_engine import PikachuWalkEngine
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--dx", type=float, default=0)
@@ -43,7 +44,7 @@ parser.add_argument("--walk_max_dx_backward", type=float, default=None)
 parser.add_argument("-l", "--length", type=int, default=10)
 parser.add_argument(
     "--duck",
-    choices=["go_bdx", "open_duck_mini", "open_duck_mini_v2"],
+    choices=["go_bdx", "open_duck_mini", "open_duck_mini_v2", "pikachu"],
     help="Duck type",
     required=True,
 )
@@ -83,15 +84,19 @@ class GaitParameters:
         if args.duck == "open_duck_mini":
             self.robot = 'open_duck_mini'
             self.robot_urdf = "open_duck_mini.urdf"
-            self.asset_path = os.path.join(script_path, "../open_duck_reference_motion_generator/robots/open_duck_mini/")
+            self.asset_path = os.path.join(script_path, "../reference_motion_generator/robots/open_duck_mini/")
         elif args.duck == "open_duck_mini_v2":
             self.robot = 'open_duck_mini_v2'
             self.robot_urdf = "open_duck_mini_v2.urdf"
-            self.asset_path = os.path.join(script_path, "../open_duck_reference_motion_generator/robots/open_duck_mini_v2/")
+            self.asset_path = os.path.join(script_path, "../reference_motion_generator/robots/open_duck_mini_v2/")
         elif args.duck == "go_bdx":
             self.robot = 'go_bdx'
             self.robot_urdf = "go_bdx.urdf"
-            self.asset_path = os.path.join(script_path, "../open_duck_reference_motion_generator/robots/go_bdx/")
+            self.asset_path = os.path.join(script_path, "../reference_motion_generator/robots/go_bdx/")
+        elif args.duck == "pikachu":
+            self.robot = 'pikachu'
+            self.robot_urdf = "Pikachu_V025_flat.urdf"
+            self.asset_path = os.path.join(script_path, "../reference_motion_generator/robots/Pikachu_V025_flat/")
         self.dx = 0.1
         self.dy = 0.0
         self.dtheta = 0.0
@@ -150,7 +155,9 @@ class GaitParameters:
             json.dump(data, f, indent=4)
 
     def create_pwe(self, parameters=None):
-        pwe = PlacoWalkEngine(self.asset_path, self.robot_urdf, parameters)
+        # pwe = PlacoWalkEngine(self.asset_path, self.robot_urdf, parameters)
+        pwe = PikachuWalkEngine(self.asset_path, self.robot_urdf, parameters)
+
         self.reset(pwe)
         pwe.set_traj(0, 0, 0)
         return pwe

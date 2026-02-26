@@ -2,7 +2,7 @@
   "_comment": "说明：'feet_spacing' 表示左右脚间的横向距离（单位：米）。\n如果两脚间距不正确,请修改此处的值并重新运行程序。示例：0.12 表示 12 厘米。",
   "dx": 0.0,
   "dy": 0.0,
-  "dtheta": -0.15,
+  "dtheta": 0.0,
   "duration": 5,
   "hardware": true,
   "trunk_mode": false,

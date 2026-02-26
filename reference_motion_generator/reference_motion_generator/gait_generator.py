@@ -9,6 +9,7 @@ from placo_utils.visualization import footsteps_viz, robot_frame_viz, robot_viz
 from scipy.spatial.transform import Rotation as R
 
 from placo_walk_engine import PlacoWalkEngine
+from pikachu_walk_engine import PikachuWalkEngine
 
 
 def open_browser():
@@ -60,7 +61,7 @@ parser.add_argument("-l", "--length", type=int, default=10)
 parser.add_argument("-m", "--meshcat_viz", action="store_true", default=False)
 parser.add_argument(
     "--duck",
-    choices=["go_bdx", "open_duck_mini", "open_duck_mini_v2"],
+    choices=["go_bdx", "open_duck_mini", "open_duck_mini_v2", "pikachu"],
     help="Duck type",
     required=True,
 )
@@ -115,11 +116,20 @@ if args.debug:
 
 script_path = os.path.dirname(os.path.abspath(__file__))
 robot = args.duck
-robot_urdf = f"{robot}.urdf"
-asset_path = os.path.join(script_path, f"robots/{robot}")
+
+# Set appropriate paths and URDF based on robot type
+if robot == "pikachu":
+    robot_urdf = "Pikachu_V025_flat.urdf"
+    asset_path = os.path.join(script_path, f"robots/Pikachu_V025_flat")
+else:
+    robot_urdf = f"{robot}.urdf"
+    asset_path = os.path.join(script_path, f"robots/{robot}")
+
+# For pikachu, config_dir and asset_path are the same
+config_dir = asset_path
 
 preset_filename = args.preset
-filename = os.path.join(asset_path, "placo_defaults.json")
+filename = os.path.join(config_dir, "placo_defaults.json")
 if preset_filename:
     if os.path.exists(preset_filename):
         filename = preset_filename
@@ -133,7 +143,10 @@ args.dx = gait_parameters["dx"]
 args.dy = gait_parameters["dy"]
 args.dtheta = gait_parameters["dtheta"]
 
-pwe = PlacoWalkEngine(asset_path, robot_urdf, gait_parameters)
+if robot == "pikachu":
+    pwe = PikachuWalkEngine(asset_path, robot_urdf, gait_parameters)
+else:
+    pwe = PlacoWalkEngine(asset_path, robot_urdf, gait_parameters)
 
 first_joints_positions = list(pwe.get_angles().values())
 first_T_world_fbase = pwe.robot.get_T_world_fbase()
