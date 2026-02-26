@@ -1,0 +1,10 @@
+# For AWD and amp for hardware
+# [root position, root orientation,
+   joint poses (e.g. rotations), target toe positions, 
+   linear velocity, angular velocity, 
+   joint velocities, target toe velocities]
+# [x, y, z, qx, qy, qz, qw, j1, j2, j3, j4, j5, j6, j7, j8, j9, j10, 
+   l_toe_x, l_toe_y, l_toe_z, r_toe_x, r_toe_y, r_toe_z,  
+   lin_vel_x, lin_vel_y, lin_vel_z, ang_vel_x, ang_vel_y, ang_vel_z, 
+   j1_vel, j2_vel, j3_vel, j4_vel, j5_vel, j6_vel, j7_vel, j8_vel, j9_vel, j10_vel,
+   l_toe_vel_x, l_toe_vel_y, l_toe_vel_z, r_toe_vel_x, r_toe_vel_y, r_toe_vel_z]
