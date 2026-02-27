@@ -556,15 +556,21 @@ def gait_generator_thread():
                 frames = json_data["Frames"]
                 frame_duration = json_data.get("FrameDuration", 1/FPS)
                 replay_joint_names = json_data.get("Joints", [])
+                legacy_txt_quat = False
             elif txt_data:
                 frames = txt_data["Frames"]
                 frame_duration = txt_data.get("FrameDuration", 1/FPS)
                 replay_joint_names = txt_data.get("Joints", [])
+                # Legacy txt converter in this repo stores quaternion as y,z,w,x.
+                # Recover to scipy/placo expected order x,y,z,w during replay.
+                legacy_txt_quat = txt_data.get("QuaternionOrder") in (None, "legacy_yzwx")
             else:
                 run_loop = False
                 continue
                 
             print(f"Replay mode: total frames = {len(frames)}, frame_duration = {frame_duration}")
+            if legacy_txt_quat:
+                print("Replay mode: applying legacy TXT quaternion fix (y,z,w,x -> x,y,z,w)")
             
             # Reset frame index at the start of replay
             current_frame_index = 0
@@ -622,6 +628,10 @@ def gait_generator_thread():
                     else:
                         print(f"ERROR: Frame format not recognized, frame length: {len(frame)}, expected: 7+{num_joints}={7+num_joints}")
                         break
+
+                if legacy_txt_quat:
+                    # legacy y,z,w,x -> x,y,z,w
+                    root_quat = [root_quat[3], root_quat[0], root_quat[1], root_quat[2]]
                 
                 # Update robot state
                 T_world_trunk = np.eye(4)

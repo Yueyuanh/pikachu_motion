@@ -94,10 +94,10 @@ def convert_json_to_txt(input_path, output_path):
         root_position = frame[idx:idx+3]
         idx += 3
         
-        # 2. root_orientation_quat (4 elements: qw, qx, qy, qz in original format)
+        # 2. root_orientation_quat (4 elements: qx, qy, qz, qw in original format)
         if idx + 4 > len(frame):
             raise ValueError(f"Frame {frame_idx} missing root_orientation_quat data")
-        qw, qx, qy, qz = frame[idx:idx+4]
+        qx, qy, qz, qw = frame[idx:idx+4]
         idx += 4
         
         # 3. joints_positions (variable length)
@@ -164,7 +164,7 @@ def convert_json_to_txt(input_path, output_path):
         #  l_toe_vel_x, l_toe_vel_y, l_toe_vel_z, r_toe_vel_x, r_toe_vel_y, r_toe_vel_z]
         new_frame = (
             root_position +           # 3: x, y, z
-            [qx, qy, qz, qw] +       # 4: qx, qy, qz, qw (reordered from qw, qx, qy, qz)
+            [qx, qy, qz, qw] +       # 4: qx, qy, qz, qw
             joints_positions +        # n: joint positions
             left_toe_pos +           # 3: l_toe_x, l_toe_y, l_toe_z
             right_toe_pos +          # 3: r_toe_x, r_toe_y, r_toe_z
@@ -183,6 +183,7 @@ def convert_json_to_txt(input_path, output_path):
         "FrameDuration": data.get("FrameDuration", 0.021),
         "EnableCycleOffsetPosition": data.get("EnableCycleOffsetPosition", True),
         "EnableCycleOffsetRotation": data.get("EnableCycleOffsetRotation", True),
+        "QuaternionOrder": "xyzw",
         "MotionWeight": data.get("MotionWeight", 0.5),
         "Frames": processed_frames
     }
@@ -194,6 +195,7 @@ def convert_json_to_txt(input_path, output_path):
         f.write('  "FrameDuration": ' + json.dumps(output_data["FrameDuration"]) + ',\n')
         f.write('  "EnableCycleOffsetPosition": ' + json.dumps(output_data["EnableCycleOffsetPosition"]) + ',\n')
         f.write('  "EnableCycleOffsetRotation": ' + json.dumps(output_data["EnableCycleOffsetRotation"]) + ',\n')
+        f.write('  "QuaternionOrder": ' + json.dumps(output_data["QuaternionOrder"]) + ',\n')
         f.write('  "MotionWeight": ' + json.dumps(output_data["MotionWeight"]) + ',\n')
         f.write('  "Frames": [\n')
         
