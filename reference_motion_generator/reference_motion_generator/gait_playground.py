@@ -49,6 +49,8 @@ parser.add_argument(
     required=True,
 )
 parser.add_argument("--preset", type=str, help="Path to the preset file")
+parser.add_argument("--json", type=str, help="Path to JSON file for replay mode")
+parser.add_argument("--txt", type=str, help="Path to TXT file for replay mode")
 args = parser.parse_args()
 
 app = Flask(__name__)
@@ -259,7 +261,33 @@ pwe = gait.create_pwe(gait_parameters)
 viz = robot_viz(pwe.robot)
 viz.display(pwe.robot.state.q)
 
+# Replay variables
+json_data = None
+txt_data = None
+current_frame_index = 0
+total_frames = 0
+is_replay_mode = False
+
+# Check for replay mode
+if args.json:
+    is_replay_mode = True
+    with open(args.json, 'r') as f:
+        json_data = json.load(f)
+    total_frames = len(json_data["Frames"])
+    print(f"Loaded JSON replay file: {args.json}, total frames: {total_frames}")
+elif args.txt:
+    is_replay_mode = True
+    with open(args.txt, 'r') as f:
+        txt_data = json.load(f)  # TXT files are also JSON format
+    total_frames = len(txt_data["Frames"])
+    print(f"Loaded TXT replay file: {args.txt}, total frames: {total_frames}")
+
+if is_replay_mode:
+    print("Running in replay mode")
+
 threading.Timer(1, open_browser).start()
+
+
 
 run_loop = False
 dorun = False
@@ -267,6 +295,27 @@ doreset = False
 doupdate = False
 gait_condition = threading.Condition()
 # gait_start_semaphore = threading.Semaphore(0)
+
+@app.route('/get_replay_progress', methods=['GET'])
+def get_replay_progress():
+    global current_frame_index, total_frames
+    return jsonify({
+        'current_frame': current_frame_index,
+        'total_frames': total_frames,
+        'is_replay_mode': is_replay_mode
+    })
+
+@app.route('/start_replay', methods=['POST'])
+def start_replay():
+    global dorun, run_loop
+    if is_replay_mode:
+        with gait_condition:
+            dorun = True
+            run_loop = True
+            gait_condition.notify()
+        return "Replay started", 200
+    else:
+        return "Not in replay mode", 400
 
 @app.route('/log', methods=['POST'])
 def log_message():
@@ -277,7 +326,7 @@ def log_message():
 @app.route('/', methods=['GET', 'POST'])
 def index():
     global run_loop
-    return render_template('index.html', parameters=gait)
+    return render_template('index.html', parameters=gait, is_replay_mode=is_replay_mode)
 
 @app.route('/save_state', methods=['POST'])
 def save_state():
@@ -340,6 +389,16 @@ def change_robot():
 def run():
     global dorun
     global run_loop
+    # If in replay mode, don't allow running the generator
+    if is_replay_mode:
+        # In replay mode, this endpoint can be used to force start replay
+        with gait_condition:
+            run_loop = False
+            dorun = True
+            gait_condition.notify()
+        print("Replay mode: forced start requested")
+        return "Replay started", 200
+    
     # Update parameters from sliders
     gait.dx = float(request.form['dx'])
     gait.dy = float(request.form['dy'])
@@ -374,6 +433,11 @@ def run():
 def update():
     global dorun
     global run_loop
+    # If in replay mode, don't allow updating the generator
+    if is_replay_mode:
+        print("Cannot update generator in replay mode. Stop replay first.")
+        return "Cannot update generator in replay mode", 400
+    
     # Update parameters from sliders
     gait.dx = float(request.form['dx'])
     gait.dy = float(request.form['dy'])
@@ -431,6 +495,7 @@ def gait_generator_thread():
     global pwe
     global viz
     global DT
+    global current_frame_index
     while True:
         print("gait generator waiting")
         with gait_condition:
@@ -459,139 +524,257 @@ def gait_generator_thread():
                 doreset = False
                 continue
             run_loop = True
-        gait.reset(pwe)
-        pwe.set_traj(gait.dx, gait.dy, gait.dtheta + 0.001)
-        start = pwe.t
-
-        last_record = 0
-        last_meshcat_display = 0
-        prev_root_position = [0, 0, 0]
-        prev_root_orientation_euler = [0, 0, 0]
-        prev_left_toe_pos = [0, 0, 0]
-        prev_right_toe_pos = [0, 0, 0]
-        prev_joints_positions = None
-        i = 0
-        prev_initialized = False
-        while run_loop:
-            pwe.tick(DT)
-            if pwe.t <= 0:
-                # print("waiting ")
-                start = pwe.t
-                last_record = pwe.t + 1 / FPS
-                last_meshcat_display = pwe.t + 1 / MESHCAT_FPS
+        
+        # Check if in replay mode
+        if is_replay_mode:
+            # Handle replay mode
+            if json_data:
+                frames = json_data["Frames"]
+                frame_duration = json_data.get("FrameDuration", 1/FPS)
+            elif txt_data:
+                frames = txt_data["Frames"]
+                frame_duration = txt_data.get("FrameDuration", 1/FPS)
+            else:
+                run_loop = False
                 continue
-
-            # print(np.around(pwe.robot.get_T_world_fbase()[:3, 3], 3))
-
-            if pwe.t - last_record >= 1 / FPS:
-                # before
-                # T_world_fbase = pwe.robot.get_T_world_fbase()
-                # after
-                T_world_fbase = pwe.robot.get_T_world_trunk()
-                # fv.pushFrame(T_world_fbase, "trunk")
-                root_position = list(T_world_fbase[:3, 3])
-                root_orientation_quat = list(R.from_matrix(T_world_fbase[:3, :3]).as_quat())
-                joints_positions = list(pwe.get_angles().values())
-
-                T_world_leftFoot = pwe.robot.get_T_world_left()
-                T_world_rightFoot = pwe.robot.get_T_world_right()
-
-                # fv.pushFrame(T_world_leftFoot, "left")
-                # fv.pushFrame(T_world_rightFoot, "right")
-
-                T_body_leftFoot = np.linalg.inv(T_world_fbase) @ T_world_leftFoot
-                T_body_rightFoot = np.linalg.inv(T_world_fbase) @ T_world_rightFoot
-
-                # left_foot_pose = pwe.robot.get_T_world_left()
-                # right_foot_pose = pwe.robot.get_T_world_right()
-
-                left_toe_pos = list(T_body_leftFoot[:3, 3])
-                right_toe_pos = list(T_body_rightFoot[:3, 3])
-
-                world_linear_vel = list(
-                    (np.array(root_position) - np.array(prev_root_position)) / (1 / FPS)
-                )
-                body_rot_mat = T_world_fbase[:3, :3]
-                body_linear_vel = list(body_rot_mat.T @ world_linear_vel)
-                # print("world linear vel", world_linear_vel)
-                # print("body linear vel", body_linear_vel)
-
-                world_angular_vel = list(
-                    (
-                        R.from_quat(root_orientation_quat).as_euler("xyz")
-                        - prev_root_orientation_euler
-                    )
-                    / (1 / FPS)
-                )
-                body_angular_vel = list(body_rot_mat.T @ world_angular_vel)
-                # print("world angular vel", world_angular_vel)
-                # print("body angular vel", body_angular_vel)
-
-                if prev_joints_positions == None:
-                    prev_joints_positions = [0] * len(joints_positions)
-
-                joints_vel = list(
-                    (np.array(joints_positions) - np.array(prev_joints_positions)) / (1 / FPS)
-                )
-                left_toe_vel = list(
-                    (np.array(left_toe_pos) - np.array(prev_left_toe_pos)) / (1 / FPS)
-                )
-                right_toe_vel = list(
-                    (np.array(right_toe_pos) - np.array(prev_right_toe_pos)) / (1 / FPS)
-                )
-
-                foot_contacts = pwe.get_current_support_phase()
-
-                if prev_initialized:
-                    if gait.hardware:
-                        episode["Frames"].append(
-                            root_position
-                            + root_orientation_quat
-                            + joints_positions
-                            + left_toe_pos
-                            + right_toe_pos
-                            + world_linear_vel
-                            + world_angular_vel
-                            + joints_vel
-                            + left_toe_vel
-                            + right_toe_vel
-                            + foot_contacts
-                        )
+                
+            print(f"Replay mode: total frames = {len(frames)}, frame_duration = {frame_duration}")
+            
+            # Reset frame index at the start of replay
+            current_frame_index = 0
+            
+            # Get all joint names for this robot to determine how many joints are in the file
+            all_robot_joints = [joint for joint in pwe.robot.joint_names() if joint not in ['root_joint', 'world_joint']]
+            # Use the joint names from the walk engine which tracks the specific joints
+            joint_names = list(pwe.get_angles().keys())
+            num_joints = len(joint_names)
+            
+            # Determine data format based on frame length
+            # If frame length matches expected for this robot, assume it's hardware format:
+            # [root_pos(3) + root_quat(4) + joints(n) + left_toe_pos(3) + right_toe_pos(3) + 
+            #  lin_vel(3) + ang_vel(3) + joints_vel(n) + left_toe_vel(3) + right_toe_vel(3) + foot_contacts(2)]
+            # Total: 3+4+n+3+3+3+3+n+3+3+2 = 27+2n
+            expected_hardware_frame_len = 27 + 2 * num_joints
+            # Or basic format: root_pos(3) + root_quat(4) + joints(n)
+            # Total: 3+4+n = 7+n
+            expected_basic_frame_len = 7 + num_joints
+            
+            if len(frames) > 0:
+                is_hardware_format = len(frames[0]) == expected_hardware_frame_len
+                is_basic_format = len(frames[0]) == expected_basic_frame_len
+            else:
+                print("ERROR: No frames to replay")
+                run_loop = False
+                continue
+            
+            print(f"Replay mode: num_joints = {num_joints}, hardware_format = {is_hardware_format}, basic_format = {is_basic_format}")
+            
+            while run_loop and current_frame_index < len(frames):
+                frame = frames[current_frame_index]
+                
+                if is_hardware_format:
+                    # Hardware format: [root_pos, root_quat, joints_pos, left_toe_pos, right_toe_pos, 
+                    # lin_vel, ang_vel, joints_vel, left_toe_vel, right_toe_vel, foot_contacts]
+                    root_pos = frame[0:3]  # x, y, z
+                    root_quat = frame[3:7]  # qx, qy, qz, qw
+                    joints_pos = frame[7:7+num_joints]  # joint positions
+                elif is_basic_format:
+                    # Basic format: [root_pos, root_quat, joints_pos]
+                    root_pos = frame[0:3]  # x, y, z
+                    root_quat = frame[3:7]  # qx, qy, qz, qw
+                    joints_pos = frame[7:7+num_joints]  # joint positions
+                else:
+                    # For other formats, determine based on frame length
+                    # Typically [root_pos(3) + root_quat(4) + joints(n)]
+                    # Total: 7+n elements
+                    if len(frame) >= 7 + num_joints:
+                        root_pos = frame[0:3]  # x, y, z
+                        root_quat = frame[3:7]  # qx, qy, qz, qw
+                        joints_pos = frame[7:7+num_joints]  # joint positions
                     else:
-                        episode["Frames"].append(
-                            root_position + root_orientation_quat + joints_positions
-                        )
-                    episode["Debug_info"].append(
-                        {
-                            "left_foot_pose": list(T_world_leftFoot.flatten()),
-                            "right_foot_pose": list(T_world_rightFoot.flatten()),
-                        }
-                    )
-
-                prev_root_position = root_position.copy()
-                prev_root_orientation_euler = (
-                    R.from_quat(root_orientation_quat).as_euler("xyz").copy()
-                )
-                prev_left_toe_pos = left_toe_pos.copy()
-                prev_right_toe_pos = right_toe_pos.copy()
-                prev_joints_positions = joints_positions.copy()
-                prev_initialized = True
-
-                last_record = pwe.t
-                # print("saved frame")
-
-            if pwe.t - last_meshcat_display >= 1 / MESHCAT_FPS:
-                last_meshcat_display = pwe.t
+                        print(f"ERROR: Frame format not recognized, frame length: {len(frame)}, expected: 7+{num_joints}={7+num_joints}")
+                        break
+                
+                # Update robot state
+                T_world_trunk = np.eye(4)
+                T_world_trunk[:3, 3] = root_pos
+                T_world_trunk[:3, :3] = R.from_quat(root_quat).as_matrix()
+                
+                # Set the robot's base pose
+                pwe.robot.set_T_world_fbase(T_world_trunk)
+                
+                # Set joint positions (we need to map them correctly)
+                # First, get all joint names in the robot to make sure we set all joints
+                all_robot_joints = [joint for joint in pwe.robot.joint_names() if joint not in ['root_joint', 'world_joint']]
+                
+                # Set each joint position from the data
+                for i, joint_name in enumerate(all_robot_joints):
+                    if i < len(joints_pos):
+                        try:
+                            pwe.robot.set_joints(joint_name, joints_pos[i])
+                        except:
+                            # If joint doesn't exist or can't be set, continue
+                            continue
+                
+                
+                # Update visualization - update every frame to ensure smooth animation
                 viz.display(pwe.robot.state.q)
                 footsteps_viz(pwe.trajectory.get_supports())
                 robot_frame_viz(pwe.robot, "trunk")
                 robot_frame_viz(pwe.robot, "left_foot")
                 robot_frame_viz(pwe.robot, "right_foot")
+                
+                # Sleep based on frame duration
+                time.sleep(frame_duration)
+                
+                current_frame_index += 1
+                
+                # Update the global variable so progress can be tracked
+                globals()['current_frame_index'] = current_frame_index
+                
+            # End of replay - set run_loop to False to exit the loop
+            run_loop = False
+            
+            # Sleep based on frame duration
+            time.sleep(frame_duration)
+            
+            current_frame_index += 1
+        
+        else:
+            # Original generation mode
+            gait.reset(pwe)
+            pwe.set_traj(gait.dx, gait.dy, gait.dtheta + 0.001)
+            start = pwe.t
 
-            if pwe.t - start > gait.duration:
-                break
+            last_record = 0
+            last_meshcat_display = 0
+            prev_root_position = [0, 0, 0]
+            prev_root_orientation_euler = [0, 0, 0]
+            prev_left_toe_pos = [0, 0, 0]
+            prev_right_toe_pos = [0, 0, 0]
+            prev_joints_positions = None
+            i = 0
+            prev_initialized = False
+            while run_loop:
+                pwe.tick(DT)
+                if pwe.t <= 0:
+                    # print("waiting ")
+                    start = pwe.t
+                    last_record = pwe.t + 1 / FPS
+                    last_meshcat_display = pwe.t + 1 / MESHCAT_FPS
+                    continue
 
-            i += 1
+                # print(np.around(pwe.robot.get_T_world_fbase()[:3, 3], 3))
+
+                if pwe.t - last_record >= 1 / FPS:
+                    # before
+                    # T_world_fbase = pwe.robot.get_T_world_fbase()
+                    # after
+                    T_world_fbase = pwe.robot.get_T_world_trunk()
+                    # fv.pushFrame(T_world_fbase, "trunk")
+                    root_position = list(T_world_fbase[:3, 3])
+                    root_orientation_quat = list(R.from_matrix(T_world_fbase[:3, :3]).as_quat())
+                    joints_positions = list(pwe.get_angles().values())
+
+                    T_world_leftFoot = pwe.robot.get_T_world_left()
+                    T_world_rightFoot = pwe.robot.get_T_world_right()
+
+                    # fv.pushFrame(T_world_leftFoot, "left")
+                    # fv.pushFrame(T_world_rightFoot, "right")
+
+                    T_body_leftFoot = np.linalg.inv(T_world_fbase) @ T_world_leftFoot
+                    T_body_rightFoot = np.linalg.inv(T_world_fbase) @ T_world_rightFoot
+
+                    # left_foot_pose = pwe.robot.get_T_world_left()
+                    # right_foot_pose = pwe.robot.get_T_world_right()
+
+                    left_toe_pos = list(T_body_leftFoot[:3, 3])
+                    right_toe_pos = list(T_body_rightFoot[:3, 3])
+
+                    world_linear_vel = list(
+                        (np.array(root_position) - np.array(prev_root_position)) / (1 / FPS)
+                    )
+                    body_rot_mat = T_world_fbase[:3, :3]
+                    body_linear_vel = list(body_rot_mat.T @ world_linear_vel)
+                    # print("world linear vel", world_linear_vel)
+                    # print("body linear vel", body_linear_vel)
+
+                    world_angular_vel = list(
+                        (
+                            R.from_quat(root_orientation_quat).as_euler("xyz")
+                            - prev_root_orientation_euler
+                        )
+                        / (1 / FPS)
+                    )
+                    body_angular_vel = list(body_rot_mat.T @ world_angular_vel)
+                    # print("world angular vel", world_angular_vel)
+                    # print("body angular vel", body_angular_vel)
+
+                    if prev_joints_positions == None:
+                        prev_joints_positions = [0] * len(joints_positions)
+
+                    joints_vel = list(
+                        (np.array(joints_positions) - np.array(prev_joints_positions)) / (1 / FPS)
+                    )
+                    left_toe_vel = list(
+                        (np.array(left_toe_pos) - np.array(prev_left_toe_pos)) / (1 / FPS)
+                    )
+                    right_toe_vel = list(
+                        (np.array(right_toe_pos) - np.array(prev_right_toe_pos)) / (1 / FPS)
+                    )
+
+                    foot_contacts = pwe.get_current_support_phase()
+
+                    if prev_initialized:
+                        if gait.hardware:
+                            episode["Frames"].append(
+                                root_position
+                                + root_orientation_quat
+                                + joints_positions
+                                + left_toe_pos
+                                + right_toe_pos
+                                + world_linear_vel
+                                + world_angular_vel
+                                + joints_vel
+                                + left_toe_vel
+                                + right_toe_vel
+                                + foot_contacts
+                            )
+                        else:
+                            episode["Frames"].append(
+                                root_position + root_orientation_quat + joints_positions
+                            )
+                        episode["Debug_info"].append(
+                            {
+                                "left_foot_pose": list(T_world_leftFoot.flatten()),
+                                "right_foot_pose": list(T_world_rightFoot.flatten()),
+                            }
+                        )
+
+                    prev_root_position = root_position.copy()
+                    prev_root_orientation_euler = (
+                        R.from_quat(root_orientation_quat).as_euler("xyz").copy()
+                    )
+                    prev_left_toe_pos = left_toe_pos.copy()
+                    prev_right_toe_pos = right_toe_pos.copy()
+                    prev_joints_positions = joints_positions.copy()
+                    prev_initialized = True
+
+                    last_record = pwe.t
+                    # print("saved frame")
+
+                if pwe.t - last_meshcat_display >= 1 / MESHCAT_FPS:
+                    last_meshcat_display = pwe.t
+                    viz.display(pwe.robot.state.q)
+                    footsteps_viz(pwe.trajectory.get_supports())
+                    robot_frame_viz(pwe.robot, "trunk")
+                    robot_frame_viz(pwe.robot, "left_foot")
+                    robot_frame_viz(pwe.robot, "right_foot")
+
+                if pwe.t - start > gait.duration:
+                    break
+
+                i += 1
         run_loop = False
         # print("recorded", len(episode["Frames"]), "frames")
         # args_name = "dummy"
@@ -614,6 +797,14 @@ def open_browser():
 
 thread = threading.Thread(target=gait_generator_thread, daemon=True)
 thread.start()
+
+# If in replay mode, automatically start the replay
+if is_replay_mode:
+    with gait_condition:
+        dorun = True
+        run_loop = True
+        gait_condition.notify()
+        print("Replay mode: automatically starting playback")
 
 if __name__ == '__main__':
     app.run(debug=False)

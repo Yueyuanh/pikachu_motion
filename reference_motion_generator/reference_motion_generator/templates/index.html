@@ -63,22 +63,47 @@
         .robot-selector label {
             margin-right: 5px;
         }
+        /* Style for replay mode */
+        .replay-info {
+            background-color: #e7f3ff;
+            border: 1px solid #b3d9ff;
+            border-radius: 5px;
+            padding: 10px;
+            margin: 10px 0;
+            text-align: center;
+        }
     </style>
 </head>
 <body onload="loadParameters(); initValues()">
     <h1>Placo Gait Generator</h1>
 
+    {% if is_replay_mode %}
+        <div class="replay-info">
+            <h2>Replay Mode Active</h2>
+            <p>Currently replaying motion data. Parameter controls are disabled during replay.</p>
+            <div id="replay-progress">
+                <p>Progress: <span id="current-frame">0</span> / <span id="total-frames">0</span> frames</p>
+                <div id="progress-bar-container" style="width: 100%; background-color: #ddd; border-radius: 5px;">
+                    <div id="progress-bar" style="width: 0%; height: 20px; background-color: #4CAF50; border-radius: 5px; transition: width 0.3s;"></div>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+
     <!-- Robot Selector Dropdown -->
     <div class="robot-selector">
         <label for="robot-select">Select Robot:</label>
-        <select id="robot-select" name="robot" onchange="changeRobot()">
+        <select id="robot-select" name="robot" onchange="changeRobot()" {% if is_replay_mode %}disabled{% endif %}>
             <option value="go_bdx" {{ 'selected' if parameters.robot == 'go_bdx' else '' }}>Go-BDX</option>
-            <option value="mini_bdx" {{ 'selected' if parameters.robot == 'mini_bdx' else '' }}>Mini-BDX</option>
+            <option value="open_duck_mini" {{ 'selected' if parameters.robot == 'open_duck_mini' else '' }}>Open Duck Mini</option>
+            <option value="open_duck_mini_v2" {{ 'selected' if parameters.robot == 'open_duck_mini_v2' else '' }}>Open Duck Mini V2</option>
+            <option value="pikachu" {{ 'selected' if parameters.robot == 'pikachu' else '' }}>Pikachu</option>
         </select>
     </div>
 
     <form id="gait-form" method="POST">
-        <!-- Your existing form content -->
+        <!-- Show parameters only in generation mode -->
+        {% if not is_replay_mode %}
         <!-- Left and right columns with sliders -->
         <div style="display: flex; justify-content: space-between;">
             <!-- Left Column -->
@@ -122,7 +147,7 @@
             </div>
         </div>
 
-    <iframe id="meshcat" src="http://127.0.0.1:7000/static/"></iframe>
+        <iframe id="meshcat" src="http://127.0.0.1:7000/static/"></iframe>
 
         <div style="display: flex; justify-content: space-between;">
             <!-- Left Column -->
@@ -285,14 +310,23 @@
                 </div>
             </div>
         </div>
+        {% else %}
+            <iframe id="meshcat" src="http://127.0.0.1:7000/static/"></iframe>
+        {% endif %}
     </form>
 
     <div class="form-buttons">
-        <button id="run-button" name="run_button" onclick="triggerRun()">Run</button>
-        <button onclick="triggerStop()">Stop</button>
-        <button onclick="triggerReset()">Reset</button>
-        <button onclick="triggerSave()">Save</button>
-        <button onclick="triggerDefaults()">Defaults</button>
+        {% if not is_replay_mode %}
+            <button id="run-button" name="run_button" onclick="triggerRun()">Run</button>
+            <button onclick="triggerStop()">Stop</button>
+            <button onclick="triggerReset()">Reset</button>
+            <button onclick="triggerSave()">Save</button>
+            <button onclick="triggerDefaults()">Defaults</button>
+        {% else %}
+            <button onclick="triggerStop()">Stop Replay</button>
+            <button onclick="triggerReset()">Reset</button>
+            <button onclick="startReplay()">Force Start</button>
+        {% endif %}
         <button onclick="setPlaybackSpeed(0.25)">¼-x</button>
         <button onclick="setPlaybackSpeed(0.5)">½-x</button>
         <button onclick="setPlaybackSpeed(0.75)">¾-x</button>
@@ -300,8 +334,17 @@
     </div>
 
     <script>
+        // Check if in replay mode
+        const isReplayMode = {{ 'true' if is_replay_mode else 'false' }};
+
         // Existing JavaScript functions
         function liveUpdate() {
+            // If in replay mode, do not send update request
+            if (isReplayMode) {
+                console.log("Cannot update parameters in replay mode.");
+                return;
+            }
+            
             // Get form data
             const formData = new FormData(document.getElementById('gait-form'));
 
@@ -329,11 +372,21 @@
         function initValues() {
             var sliders = document.querySelectorAll('input[type="range"]');
             sliders.forEach(function(slider) {
+                // If in replay mode, disable the sliders
+                if (isReplayMode) {
+                    slider.disabled = true;
+                }
                 updateValue(slider.id);
             });
         }
 
         function triggerRun() {
+            // If in replay mode, do not send run request
+            if (isReplayMode) {
+                console.log("Cannot run gait generation in replay mode.");
+                return;
+            }
+            
             // Get form data
             const formData = new FormData(document.getElementById('gait-form'));
 
@@ -381,6 +434,12 @@
         }
 
         function triggerSave() {
+            // If in replay mode, do not allow saving
+            if (isReplayMode) {
+                console.log("Cannot save state in replay mode.");
+                return;
+            }
+            
             fetch('/save_state', {
                 method: 'POST'
             })
@@ -395,6 +454,12 @@
         }
 
         function triggerDefaults() {
+            // If in replay mode, do not allow loading defaults
+            if (isReplayMode) {
+                console.log("Cannot load defaults in replay mode.");
+                return;
+            }
+            
             fetch('/defaults')
             .then(response => response.json())
             .then(data => {
@@ -423,6 +488,12 @@
 
         // New function to handle robot selection
         function changeRobot() {
+            // If in replay mode, do not allow changing robot
+            if (isReplayMode) {
+                console.log("Cannot change robot in replay mode.");
+                return;
+            }
+            
             const robotSelect = document.getElementById('robot-select');
             const selectedRobot = robotSelect.value;
 
@@ -454,6 +525,11 @@
                 for (const key in data) {
                     const element = document.getElementById(key);
                     if (element) {
+                        if (isReplayMode) {
+                            // In replay mode, keep sliders disabled
+                            element.disabled = true;
+                        }
+                        
                         if (element.type === 'checkbox') {
                             element.checked = data[key];
                         } else {
@@ -483,6 +559,46 @@
                 }
             })
             .catch(error => console.error("Error:", error));
+        }
+        
+        // Function to update replay progress
+        function updateReplayProgress() {
+            if (isReplayMode) {
+                fetch('/get_replay_progress')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('current-frame').textContent = data.current_frame;
+                    document.getElementById('total-frames').textContent = data.total_frames;
+                    
+                    // Calculate and update progress bar
+                    if (data.total_frames > 0) {
+                        const progressPercent = (data.current_frame / data.total_frames) * 100;
+                        document.getElementById('progress-bar').style.width = progressPercent + '%';
+                    }
+                })
+                .catch(error => console.error('Error getting replay progress:', error));
+            }
+        }
+        
+        // Function to start replay (force start)
+        function startReplay() {
+            fetch('/start_replay', {
+                method: 'POST'
+            })
+            .then(response => {
+                if (response.ok) {
+                    console.log("Replay started.");
+                } else {
+                    console.error("Failed to start replay.");
+                }
+            })
+            .catch(error => console.error("Error:", error));
+        }
+        
+        // Update progress periodically if in replay mode
+        if (isReplayMode) {
+            // Update progress every 500ms
+            setInterval(updateReplayProgress, 500);
         }
     </script>
 </body>
