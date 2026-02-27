@@ -80,12 +80,10 @@
     {% if is_replay_mode %}
         <div class="replay-info">
             <h2>Replay Mode Active</h2>
-            <p>Currently replaying motion data. Parameter controls are disabled during replay.</p>
+            <p>Click Start Replay to begin. Scrubbing is enabled only after playback completes.</p>
             <div id="replay-progress">
                 <p>Progress: <span id="current-frame">0</span> / <span id="total-frames">0</span> frames</p>
-                <div id="progress-bar-container" style="width: 100%; background-color: #ddd; border-radius: 5px;">
-                    <div id="progress-bar" style="width: 0%; height: 20px; background-color: #4CAF50; border-radius: 5px; transition: width 0.3s;"></div>
-                </div>
+                <input type="range" id="replay-slider" min="0" max="0" step="1" value="0" disabled style="width: 100%;">
             </div>
         </div>
     {% endif %}
@@ -323,9 +321,9 @@
             <button onclick="triggerSave()">Save</button>
             <button onclick="triggerDefaults()">Defaults</button>
         {% else %}
-            <button onclick="triggerStop()">Stop Replay</button>
-            <button onclick="triggerReset()">Reset</button>
-            <button onclick="startReplay()">Force Start</button>
+            <button type="button" onclick="triggerStop()">Stop Replay</button>
+            <button type="button" onclick="triggerReset()">Reset</button>
+            <button type="button" onclick="startReplay()">Start Replay</button>
         {% endif %}
         <button onclick="setPlaybackSpeed(0.25)">¼-x</button>
         <button onclick="setPlaybackSpeed(0.5)">½-x</button>
@@ -336,6 +334,9 @@
     <script>
         // Check if in replay mode
         const isReplayMode = {{ 'true' if is_replay_mode else 'false' }};
+        let replayIsPlaying = false;
+        let replayIsFinished = false;
+        let replaySlider = null;
 
         // Existing JavaScript functions
         function liveUpdate() {
@@ -561,6 +562,41 @@
             .catch(error => console.error("Error:", error));
         }
         
+        function setupReplaySlider() {
+            replaySlider = document.getElementById('replay-slider');
+            if (!replaySlider) {
+                return;
+            }
+
+            replaySlider.addEventListener('input', function() {
+                document.getElementById('current-frame').textContent = replaySlider.value;
+            });
+
+            replaySlider.addEventListener('change', function() {
+                if (replaySlider.disabled) {
+                    return;
+                }
+                fetch('/set_replay_frame', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ frame: Number(replaySlider.value) })
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.text().then(msg => { throw new Error(msg); });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    replaySlider.value = data.current_frame;
+                    document.getElementById('current-frame').textContent = data.current_frame;
+                })
+                .catch(error => console.error('Error setting replay frame:', error));
+            });
+        }
+
         // Function to update replay progress
         function updateReplayProgress() {
             if (isReplayMode) {
@@ -569,18 +605,21 @@
                 .then(data => {
                     document.getElementById('current-frame').textContent = data.current_frame;
                     document.getElementById('total-frames').textContent = data.total_frames;
-                    
-                    // Calculate and update progress bar
-                    if (data.total_frames > 0) {
-                        const progressPercent = (data.current_frame / data.total_frames) * 100;
-                        document.getElementById('progress-bar').style.width = progressPercent + '%';
+
+                    replayIsPlaying = data.is_playing;
+                    replayIsFinished = data.is_finished;
+
+                    if (replaySlider) {
+                        replaySlider.max = Math.max(data.total_frames - 1, 0);
+                        replaySlider.value = data.current_frame;
+                        replaySlider.disabled = !(replayIsFinished && !replayIsPlaying);
                     }
                 })
                 .catch(error => console.error('Error getting replay progress:', error));
             }
         }
         
-        // Function to start replay (force start)
+        // Function to start replay
         function startReplay() {
             fetch('/start_replay', {
                 method: 'POST'
@@ -588,6 +627,9 @@
             .then(response => {
                 if (response.ok) {
                     console.log("Replay started.");
+                    if (replaySlider) {
+                        replaySlider.disabled = true;
+                    }
                 } else {
                     console.error("Failed to start replay.");
                 }
@@ -597,6 +639,8 @@
         
         // Update progress periodically if in replay mode
         if (isReplayMode) {
+            setupReplaySlider();
+            updateReplayProgress();
             // Update progress every 500ms
             setInterval(updateReplayProgress, 500);
         }

@@ -278,6 +278,9 @@ txt_data = None
 current_frame_index = 0
 total_frames = 0
 is_replay_mode = False
+replay_playing = False
+replay_finished = False
+replay_source = None
 
 # Check for replay mode
 if args.json:
@@ -311,6 +314,60 @@ def set_robot_joint(robot, joint_name, joint_value):
             return
     raise AttributeError("Robot does not expose set_joint/set_joints")
 
+def render_replay_frame(frame_index):
+    global current_frame_index
+    if not replay_source:
+        raise RuntimeError("Replay source is not initialized")
+
+    frames = replay_source["frames"]
+    num_joints = replay_source["num_joints"]
+    joint_names = replay_source["joint_names"]
+    is_hardware_format = replay_source["is_hardware_format"]
+    is_basic_format = replay_source["is_basic_format"]
+    legacy_txt_quat = replay_source["legacy_txt_quat"]
+
+    if frame_index < 0 or frame_index >= len(frames):
+        raise ValueError(f"Frame index out of range: {frame_index}")
+
+    frame = frames[frame_index]
+    if is_hardware_format or is_basic_format:
+        root_pos = frame[0:3]
+        root_quat = frame[3:7]
+        joints_pos = frame[7:7+num_joints]
+    else:
+        if len(frame) < 7 + num_joints:
+            raise ValueError(
+                f"Frame format not recognized, frame length: {len(frame)}, expected >= {7+num_joints}"
+            )
+        root_pos = frame[0:3]
+        root_quat = frame[3:7]
+        joints_pos = frame[7:7+num_joints]
+
+    if legacy_txt_quat:
+        # legacy y,z,w,x -> x,y,z,w
+        root_quat = [root_quat[3], root_quat[0], root_quat[1], root_quat[2]]
+
+    T_world_trunk = np.eye(4)
+    T_world_trunk[:3, 3] = root_pos
+    T_world_trunk[:3, :3] = R.from_quat(root_quat).as_matrix()
+    pwe.robot.set_T_world_fbase(T_world_trunk)
+
+    if len(joints_pos) != num_joints:
+        raise ValueError(f"joints_pos length mismatch: got {len(joints_pos)}, expected {num_joints}")
+
+    for joint_name, joint_value in zip(joint_names, joints_pos):
+        set_robot_joint(pwe.robot, joint_name, joint_value)
+
+    if hasattr(pwe.robot, "update_kinematics"):
+        pwe.robot.update_kinematics()
+
+    viz.display(pwe.robot.state.q)
+    footsteps_viz(pwe.trajectory.get_supports())
+    robot_frame_viz(pwe.robot, "trunk")
+    robot_frame_viz(pwe.robot, "left_foot")
+    robot_frame_viz(pwe.robot, "right_foot")
+    current_frame_index = frame_index
+
 
 
 run_loop = False
@@ -322,24 +379,53 @@ gait_condition = threading.Condition()
 
 @app.route('/get_replay_progress', methods=['GET'])
 def get_replay_progress():
-    global current_frame_index, total_frames
+    global current_frame_index, total_frames, replay_playing, replay_finished
     return jsonify({
         'current_frame': current_frame_index,
         'total_frames': total_frames,
-        'is_replay_mode': is_replay_mode
+        'is_replay_mode': is_replay_mode,
+        'is_playing': replay_playing,
+        'is_finished': replay_finished
     })
 
 @app.route('/start_replay', methods=['POST'])
 def start_replay():
-    global dorun, run_loop
+    global dorun, run_loop, replay_finished, replay_playing
     if is_replay_mode:
+        if replay_playing:
+            return "Replay already running", 409
         with gait_condition:
+            replay_finished = False
             dorun = True
             run_loop = True
             gait_condition.notify()
         return "Replay started", 200
     else:
         return "Not in replay mode", 400
+
+@app.route('/set_replay_frame', methods=['POST'])
+def set_replay_frame():
+    global replay_playing, replay_finished
+    if not is_replay_mode:
+        return "Not in replay mode", 400
+    if replay_playing:
+        return "Cannot scrub while replay is playing", 409
+    if not replay_finished:
+        return "Scrubbing is allowed only after playback finishes", 409
+    if not replay_source or total_frames == 0:
+        return "No replay frames loaded", 400
+
+    data = request.get_json(silent=True) or {}
+    if 'frame' not in data:
+        return "Missing frame index", 400
+    try:
+        frame_idx = int(data['frame'])
+    except (TypeError, ValueError):
+        return "Invalid frame index", 400
+
+    frame_idx = max(0, min(frame_idx, total_frames - 1))
+    render_replay_frame(frame_idx)
+    return jsonify({"current_frame": frame_idx}), 200
 
 @app.route('/log', methods=['POST'])
 def log_message():
@@ -496,8 +582,10 @@ def update():
 def stop():
     global run_loop
     global dorun
+    global replay_playing
     dorun = False
     run_loop = False
+    replay_playing = False
     print("Stopping")
     return "Loop stopped successfully", 200
 
@@ -505,10 +593,16 @@ def stop():
 def reset():
     global run_loop
     global doreset
+    global replay_playing
+    global replay_finished
+    global current_frame_index
     with gait_condition:
         run_loop = False
         doreset = True
         gait_condition.notify()
+    replay_playing = False
+    replay_finished = False
+    current_frame_index = 0
     print("Resetting")
     return "Loop stopped successfully", 200
 
@@ -520,6 +614,9 @@ def gait_generator_thread():
     global viz
     global DT
     global current_frame_index
+    global replay_playing
+    global replay_finished
+    global replay_source
     while True:
         print("gait generator waiting")
         with gait_condition:
@@ -551,125 +648,64 @@ def gait_generator_thread():
         
         # Check if in replay mode
         if is_replay_mode:
-            # Handle replay mode
             if json_data:
                 frames = json_data["Frames"]
-                frame_duration = json_data.get("FrameDuration", 1/FPS)
+                frame_duration = json_data.get("FrameDuration", 1 / FPS)
                 replay_joint_names = json_data.get("Joints", [])
                 legacy_txt_quat = False
             elif txt_data:
                 frames = txt_data["Frames"]
-                frame_duration = txt_data.get("FrameDuration", 1/FPS)
+                frame_duration = txt_data.get("FrameDuration", 1 / FPS)
                 replay_joint_names = txt_data.get("Joints", [])
-                # Legacy txt converter in this repo stores quaternion as y,z,w,x.
-                # Recover to scipy/placo expected order x,y,z,w during replay.
                 legacy_txt_quat = txt_data.get("QuaternionOrder") in (None, "legacy_yzwx")
             else:
                 run_loop = False
                 continue
-                
-            print(f"Replay mode: total frames = {len(frames)}, frame_duration = {frame_duration}")
-            if legacy_txt_quat:
-                print("Replay mode: applying legacy TXT quaternion fix (y,z,w,x -> x,y,z,w)")
-            
-            # Reset frame index at the start of replay
-            current_frame_index = 0
-            
-            # Prefer the joint order stored in the file, then fall back to engine config.
+
             joint_names = replay_joint_names if replay_joint_names else list(pwe.get_angles().keys())
             num_joints = len(joint_names)
             if num_joints == 0:
                 raise RuntimeError(
                     "Replay has zero joints. Preset is missing 'joints' and file has no 'Joints'."
                 )
-            
-            # Determine data format based on frame length
-            # If frame length matches expected for this robot, assume it's hardware format:
-            # [root_pos(3) + root_quat(4) + joints(n) + left_toe_pos(3) + right_toe_pos(3) + 
-            #  lin_vel(3) + ang_vel(3) + joints_vel(n) + left_toe_vel(3) + right_toe_vel(3) + foot_contacts(2)]
-            # Total: 3+4+n+3+3+3+3+n+3+3+2 = 27+2n
-            expected_hardware_frame_len = 27 + 2 * num_joints
-            # Or basic format: root_pos(3) + root_quat(4) + joints(n)
-            # Total: 3+4+n = 7+n
-            expected_basic_frame_len = 7 + num_joints
-            
-            if len(frames) > 0:
-                is_hardware_format = len(frames[0]) == expected_hardware_frame_len
-                is_basic_format = len(frames[0]) == expected_basic_frame_len
-            else:
+            if len(frames) == 0:
                 print("ERROR: No frames to replay")
                 run_loop = False
                 continue
-            
+
+            expected_hardware_frame_len = 27 + 2 * num_joints
+            expected_basic_frame_len = 7 + num_joints
+            is_hardware_format = len(frames[0]) == expected_hardware_frame_len
+            is_basic_format = len(frames[0]) == expected_basic_frame_len
+            replay_source = {
+                "frames": frames,
+                "frame_duration": frame_duration,
+                "joint_names": joint_names,
+                "num_joints": num_joints,
+                "is_hardware_format": is_hardware_format,
+                "is_basic_format": is_basic_format,
+                "legacy_txt_quat": legacy_txt_quat,
+            }
+
+            print(f"Replay mode: total frames = {len(frames)}, frame_duration = {frame_duration}")
+            if legacy_txt_quat:
+                print("Replay mode: applying legacy TXT quaternion fix (y,z,w,x -> x,y,z,w)")
             print(f"Replay mode: num_joints = {num_joints}, hardware_format = {is_hardware_format}, basic_format = {is_basic_format}")
-            
-            while run_loop and current_frame_index < len(frames):
-                frame = frames[current_frame_index]
-                
-                if is_hardware_format:
-                    # Hardware format: [root_pos, root_quat, joints_pos, left_toe_pos, right_toe_pos, 
-                    # lin_vel, ang_vel, joints_vel, left_toe_vel, right_toe_vel, foot_contacts]
-                    root_pos = frame[0:3]  # x, y, z
-                    root_quat = frame[3:7]  # qx, qy, qz, qw
-                    joints_pos = frame[7:7+num_joints]  # joint positions
-                elif is_basic_format:
-                    # Basic format: [root_pos, root_quat, joints_pos]
-                    root_pos = frame[0:3]  # x, y, z
-                    root_quat = frame[3:7]  # qx, qy, qz, qw
-                    joints_pos = frame[7:7+num_joints]  # joint positions
-                else:
-                    # For other formats, determine based on frame length
-                    # Typically [root_pos(3) + root_quat(4) + joints(n)]
-                    # Total: 7+n elements
-                    if len(frame) >= 7 + num_joints:
-                        root_pos = frame[0:3]  # x, y, z
-                        root_quat = frame[3:7]  # qx, qy, qz, qw
-                        joints_pos = frame[7:7+num_joints]  # joint positions
-                    else:
-                        print(f"ERROR: Frame format not recognized, frame length: {len(frame)}, expected: 7+{num_joints}={7+num_joints}")
-                        break
 
-                if legacy_txt_quat:
-                    # legacy y,z,w,x -> x,y,z,w
-                    root_quat = [root_quat[3], root_quat[0], root_quat[1], root_quat[2]]
-                
-                # Update robot state
-                T_world_trunk = np.eye(4)
-                T_world_trunk[:3, 3] = root_pos
-                T_world_trunk[:3, :3] = R.from_quat(root_quat).as_matrix()
-                
-                pwe.robot.set_T_world_fbase(T_world_trunk)
-
-                if len(joints_pos) != num_joints:
-                    raise ValueError(f"joints_pos length mismatch: got {len(joints_pos)}, expected {num_joints}")
-
-                for joint_name, joint_value in zip(joint_names, joints_pos):
-                    set_robot_joint(pwe.robot, joint_name, joint_value)
-
-                if hasattr(pwe.robot, "update_kinematics"):
-                    pwe.robot.update_kinematics()
-                viz.display(pwe.robot.state.q)
-
-                footsteps_viz(pwe.trajectory.get_supports())
-                robot_frame_viz(pwe.robot, "trunk")
-                robot_frame_viz(pwe.robot, "left_foot")
-                robot_frame_viz(pwe.robot, "right_foot")
-                
-                # Sleep based on frame duration
+            replay_playing = True
+            replay_finished = False
+            current_frame_index = 0
+            frame_idx = 0
+            while run_loop and frame_idx < len(frames):
+                render_replay_frame(frame_idx)
                 time.sleep(frame_duration)
-                
-                current_frame_index += 1
-                
-                # Update the global variable so progress can be tracked
-                globals()['current_frame_index'] = current_frame_index
-                
-            # End of replay - set run_loop to False to exit the loop
+                frame_idx += 1
+
             run_loop = False
-            
-            # Sleep based on frame duration
-            time.sleep(frame_duration)
-            
-            current_frame_index += 1
+            replay_playing = False
+            if frame_idx >= len(frames):
+                replay_finished = True
+                current_frame_index = len(frames) - 1
         
         else:
             # Original generation mode
@@ -825,14 +861,6 @@ def open_browser():
 
 thread = threading.Thread(target=gait_generator_thread, daemon=True)
 thread.start()
-
-# If in replay mode, automatically start the replay
-if is_replay_mode:
-    with gait_condition:
-        dorun = True
-        run_loop = True
-        gait_condition.notify()
-        print("Replay mode: automatically starting playback")
 
 if __name__ == '__main__':
     app.run(debug=False)
