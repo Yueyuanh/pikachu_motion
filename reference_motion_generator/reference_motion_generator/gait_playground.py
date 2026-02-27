@@ -152,6 +152,8 @@ class GaitParameters:
             'walk_max_dy': self.walk_max_dy,
             'walk_max_dx_forward': self.walk_max_dx_forward,
             'walk_max_dx_backward': self.walk_max_dx_backward,
+            'joints': self.joints,
+            'joint_angles': self.joint_angles,
         }
         with open(filename, 'w') as f:
             json.dump(data, f, indent=4)
@@ -204,6 +206,8 @@ class GaitParameters:
         self.walk_max_dy = data.get('walk_max_dy')
         self.walk_max_dx_forward = data.get('walk_max_dx_forward')
         self.walk_max_dx_backward = data.get('walk_max_dx_backward')
+        self.joints = data.get('joints', [])
+        self.joint_angles = data.get('joint_angles', {})
 
 if __name__ == '__main__':
     print('exit')
@@ -215,8 +219,15 @@ else:
     filename = gait.custom_preset_name()
     if not os.path.exists(filename):
         filename = os.path.join(gait.asset_path, "placo_defaults.json")
+defaults_filename = os.path.join(gait.asset_path, "placo_defaults.json")
+with open(defaults_filename, 'r') as f:
+    default_gait_parameters = json.load(f)
 with open(filename, 'r') as f:
     gait_parameters = json.load(f)
+    if 'joints' not in gait_parameters or not gait_parameters.get('joints'):
+        gait_parameters['joints'] = default_gait_parameters.get('joints', [])
+    if 'joint_angles' not in gait_parameters:
+        gait_parameters['joint_angles'] = default_gait_parameters.get('joint_angles', {})
     print(f"gait_parameters {gait_parameters}")
     if args.double_support_ratio is not None:
         gait_parameters['double_support_ratio'] = args.double_support_ratio
@@ -286,6 +297,19 @@ if is_replay_mode:
     print("Running in replay mode")
 
 threading.Timer(1, open_browser).start()
+
+def set_robot_joint(robot, joint_name, joint_value):
+    if hasattr(robot, "set_joint"):
+        robot.set_joint(joint_name, joint_value)
+        return
+    if hasattr(robot, "set_joints"):
+        try:
+            robot.set_joints(joint_name, joint_value)
+            return
+        except TypeError:
+            robot.set_joints({joint_name: joint_value})
+            return
+    raise AttributeError("Robot does not expose set_joint/set_joints")
 
 
 
@@ -531,9 +555,11 @@ def gait_generator_thread():
             if json_data:
                 frames = json_data["Frames"]
                 frame_duration = json_data.get("FrameDuration", 1/FPS)
+                replay_joint_names = json_data.get("Joints", [])
             elif txt_data:
                 frames = txt_data["Frames"]
                 frame_duration = txt_data.get("FrameDuration", 1/FPS)
+                replay_joint_names = txt_data.get("Joints", [])
             else:
                 run_loop = False
                 continue
@@ -543,11 +569,13 @@ def gait_generator_thread():
             # Reset frame index at the start of replay
             current_frame_index = 0
             
-            # Get all joint names for this robot to determine how many joints are in the file
-            all_robot_joints = [joint for joint in pwe.robot.joint_names() if joint not in ['root_joint', 'world_joint']]
-            # Use the joint names from the walk engine which tracks the specific joints
-            joint_names = list(pwe.get_angles().keys())
+            # Prefer the joint order stored in the file, then fall back to engine config.
+            joint_names = replay_joint_names if replay_joint_names else list(pwe.get_angles().keys())
             num_joints = len(joint_names)
+            if num_joints == 0:
+                raise RuntimeError(
+                    "Replay has zero joints. Preset is missing 'joints' and file has no 'Joints'."
+                )
             
             # Determine data format based on frame length
             # If frame length matches expected for this robot, assume it's hardware format:
@@ -600,25 +628,18 @@ def gait_generator_thread():
                 T_world_trunk[:3, 3] = root_pos
                 T_world_trunk[:3, :3] = R.from_quat(root_quat).as_matrix()
                 
-                # Set the robot's base pose
                 pwe.robot.set_T_world_fbase(T_world_trunk)
-                
-                # Set joint positions (we need to map them correctly)
-                # First, get all joint names in the robot to make sure we set all joints
-                all_robot_joints = [joint for joint in pwe.robot.joint_names() if joint not in ['root_joint', 'world_joint']]
-                
-                # Set each joint position from the data
-                for i, joint_name in enumerate(all_robot_joints):
-                    if i < len(joints_pos):
-                        try:
-                            pwe.robot.set_joints(joint_name, joints_pos[i])
-                        except:
-                            # If joint doesn't exist or can't be set, continue
-                            continue
-                
-                
-                # Update visualization - update every frame to ensure smooth animation
+
+                if len(joints_pos) != num_joints:
+                    raise ValueError(f"joints_pos length mismatch: got {len(joints_pos)}, expected {num_joints}")
+
+                for joint_name, joint_value in zip(joint_names, joints_pos):
+                    set_robot_joint(pwe.robot, joint_name, joint_value)
+
+                if hasattr(pwe.robot, "update_kinematics"):
+                    pwe.robot.update_kinematics()
                 viz.display(pwe.robot.state.q)
+
                 footsteps_viz(pwe.trajectory.get_supports())
                 robot_frame_viz(pwe.robot, "trunk")
                 robot_frame_viz(pwe.robot, "left_foot")
@@ -667,10 +688,7 @@ def gait_generator_thread():
                 # print(np.around(pwe.robot.get_T_world_fbase()[:3, 3], 3))
 
                 if pwe.t - last_record >= 1 / FPS:
-                    # before
-                    # T_world_fbase = pwe.robot.get_T_world_fbase()
-                    # after
-                    T_world_fbase = pwe.robot.get_T_world_trunk()
+                    T_world_fbase = pwe.robot.get_T_world_fbase()
                     # fv.pushFrame(T_world_fbase, "trunk")
                     root_position = list(T_world_fbase[:3, 3])
                     root_orientation_quat = list(R.from_matrix(T_world_fbase[:3, :3]).as_quat())
