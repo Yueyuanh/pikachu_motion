@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360">
+<rect x="0" y="0" width="1200" height="360" fill="white" />
+<text x="40" y="20" font-size="16" font-family="monospace">Boundary Joint Angle Jump |last-first|</text>
+<line x1="40" y1="320" x2="1160" y2="320" stroke="#888" />
+<line x1="40" y1="40" x2="40" y2="320" stroke="#888" />
+<text x="46" y="52" font-size="12" font-family="monospace">max=0.26446</text>
+<rect x="40.00" y="40.00" width="111.00" height="280.00" fill="#1f77b4" />
+<rect x="152.00" y="307.43" width="111.00" height="12.57" fill="#1f77b4" />
+<rect x="264.00" y="267.70" width="111.00" height="52.30" fill="#1f77b4" />
+<rect x="376.00" y="148.00" width="111.00" height="172.00" fill="#1f77b4" />
+<rect x="488.00" y="216.23" width="111.00" height="103.77" fill="#1f77b4" />
+<rect x="600.00" y="255.62" width="111.00" height="64.38" fill="#1f77b4" />
+<rect x="712.00" y="310.70" width="111.00" height="9.30" fill="#1f77b4" />
+<rect x="824.00" y="292.14" width="111.00" height="27.86" fill="#1f77b4" />
+<rect x="936.00" y="143.28" width="111.00" height="176.72" fill="#1f77b4" />
+<rect x="1048.00" y="78.92" width="111.00" height="241.08" fill="#1f77b4" />
+</svg>

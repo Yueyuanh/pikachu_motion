@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360">
+<rect x="0" y="0" width="1200" height="360" fill="white" />
+<text x="40" y="20" font-size="16" font-family="monospace">Boundary Joint Angle Jump |last-first|</text>
+<line x1="40" y1="320" x2="1160" y2="320" stroke="#888" />
+<line x1="40" y1="40" x2="40" y2="320" stroke="#888" />
+<text x="46" y="52" font-size="12" font-family="monospace">max=0.31879</text>
+<rect x="40.00" y="286.58" width="61.22" height="33.42" fill="#1f77b4" />
+<rect x="102.22" y="112.92" width="61.22" height="207.08" fill="#1f77b4" />
+<rect x="164.44" y="160.46" width="61.22" height="159.54" fill="#1f77b4" />
+<rect x="226.67" y="297.21" width="61.22" height="22.79" fill="#1f77b4" />
+<rect x="288.89" y="287.37" width="61.22" height="32.63" fill="#1f77b4" />
+<rect x="351.11" y="122.96" width="61.22" height="197.04" fill="#1f77b4" />
+<rect x="413.33" y="202.81" width="61.22" height="117.19" fill="#1f77b4" />
+<rect x="475.56" y="40.00" width="61.22" height="280.00" fill="#1f77b4" />
+<rect x="537.78" y="157.05" width="61.22" height="162.95" fill="#1f77b4" />
+<rect x="600.00" y="203.56" width="61.22" height="116.44" fill="#1f77b4" />
+<rect x="662.22" y="93.44" width="61.22" height="226.56" fill="#1f77b4" />
+<rect x="724.44" y="62.78" width="61.22" height="257.22" fill="#1f77b4" />
+<rect x="786.67" y="277.85" width="61.22" height="42.15" fill="#1f77b4" />
+<rect x="848.89" y="311.55" width="61.22" height="8.45" fill="#1f77b4" />
+<rect x="911.11" y="308.52" width="61.22" height="11.48" fill="#1f77b4" />
+<rect x="973.33" y="292.61" width="61.22" height="27.39" fill="#1f77b4" />
+<rect x="1035.56" y="315.27" width="61.22" height="4.73" fill="#1f77b4" />
+<rect x="1097.78" y="301.82" width="61.22" height="18.18" fill="#1f77b4" />
+</svg>
